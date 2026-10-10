@@ -1,0 +1,526 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NOVA AI Video Generator</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:#080b16;color:#f4f6ff;
+font-family:system-ui,Arial,sans-serif}
+header{padding:17px 20px;background:#10162a;
+border-bottom:1px solid #29334e;display:flex;
+align-items:center;gap:12px}
+.logo{background:linear-gradient(135deg,#6475ff,#bd62ff);
+padding:10px 13px;border-radius:12px;font-weight:900}
+header h1{font-size:19px;margin:0}
+header small,.muted{color:#9caaca}
+main{max-width:1100px;margin:auto;padding:20px}
+h2{font-size:20px;margin:0 0 15px}
+.layout{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.panel{background:#11182b;border:1px solid #29334e;
+border-radius:16px;padding:17px;min-width:0}
+label{display:block;font-size:13px;color:#b9c4df;
+margin:13px 0 7px}
+input,textarea,select{width:100%;padding:11px;
+border:1px solid #34405e;border-radius:9px;
+background:#090f20;color:white;font:inherit}
+textarea{resize:vertical;min-height:85px}
+button{padding:11px 14px;border:0;border-radius:10px;
+background:#6677ff;color:white;font-weight:650;
+cursor:pointer}
+button:disabled{opacity:.5;cursor:wait}
+button.secondary{background:#25314c}
+.actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:14px}
+#preview{display:block;width:100%;height:auto;
+aspect-ratio:16/9;background:#030610;border-radius:11px}
+.status{margin-top:12px;font-size:13px;color:#b8c7e9;
+overflow-wrap:anywhere}
+.hint{font-size:12px;line-height:1.6;color:#9caaca}
+footer{text-align:center;padding:24px;color:#7887a7;font-size:12px}
+@media(max-width:720px){.layout{grid-template-columns:1fr}
+main{padding:12px}.panel{padding:13px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">N</div>
+  <div>
+    <h1>NOVA AI Video Generator</h1>
+    <small>Prompt · Animate · Export</small>
+  </div>
+</header>
+
+<main>
+  <section class="layout">
+    <div class="panel">
+      <h2>🎬 Create your video</h2>
+
+      <label for="prompt">Describe your video</label>
+      <textarea id="prompt"
+        placeholder="Example: A magical city at sunset, with glowing stars and an epic adventure">A magical city at sunset, with glowing stars and an epic adventure</textarea>
+
+      <label for="title">Video title (editable)</label>
+      <input id="title" maxlength="90"
+        value="A MAGICAL ADVENTURE">
+
+      <label for="caption">Subtitle (editable)</label>
+      <input id="caption" maxlength="140"
+        value="A journey beyond imagination">
+
+      <label for="theme">Background theme</label>
+      <select id="theme">
+        <option value="auto">Choose from prompt</option>
+        <option value="sunset">Sunset</option>
+        <option value="space">Space</option>
+        <option value="night">Night sky</option>
+        <option value="forest">Enchanted forest</option>
+        <option value="ocean">Ocean</option>
+      </select>
+
+      <label for="duration">Video duration</label>
+      <select id="duration">
+        <option value="10">10 seconds</option>
+        <option value="15" selected>15 seconds</option>
+        <option value="30">30 seconds</option>
+      </select>
+
+      <label for="music">Upload background music (optional)</label>
+      <input id="music" type="file" accept="audio/*">
+
+      <div class="actions">
+        <button id="generate">✨ Generate scenes</button>
+        <button id="play" class="secondary">▶ Preview</button>
+        <button id="stop" class="secondary">■ Stop</button>
+        <button id="export">⬇ Export WebM</button>
+      </div>
+      <p class="hint">
+        Music must be a supported audio file. Export in this browser
+        and keep this page open until recording finishes.
+      </p>
+      <div id="status" class="status" role="status">
+        Ready. Generate scenes to begin.
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>🖥️ Video preview</h2>
+      <canvas id="preview" width="1280" height="720"></canvas>
+      <div class="actions">
+        <button id="download" class="secondary" hidden>
+          Download video
+        </button>
+      </div>
+      <p class="hint">
+        Preview: 16:9 landscape · 1280 × 720.
+        The final resolution and encoding depend on browser support.
+      </p>
+    </div>
+  </section>
+</main>
+
+<footer>NOVA AI Hub · Created by Pranav PV</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const canvas = $("preview");
+const ctx = canvas.getContext("2d");
+
+let playing = false;
+let startTime = 0;
+let raf = 0;
+let lastBlobUrl = "";
+let recorder = null;
+let exporting = false;
+let audioContext = null;
+let audioElement = null;
+let audioSource = null;
+let audioDestination = null;
+let musicUrl = "";
+let particles = [];
+
+function setStatus(message) {
+  $("status").textContent = message;
+}
+
+function chooseTheme() {
+  const chosen = $("theme").value;
+  if (chosen !== "auto") return chosen;
+  const p = $("prompt").value.toLowerCase();
+
+  if (/space|galaxy|planet|cosmos|astronaut|star/.test(p))
+    return "space";
+  if (/forest|tree|jungle|magical wood/.test(p))
+    return "forest";
+  if (/ocean|sea|underwater|beach|wave/.test(p))
+    return "ocean";
+  if (/night|dark|moon|midnight|city light/.test(p))
+    return "night";
+  return "sunset";
+}
+
+function makeParticles() {
+  particles = Array.from({length:100}, () => ({
+    x: Math.random() * canvas.width,
+    y: Math.random() * canvas.height,
+    size: 1 + Math.random() * 3,
+    speed: 8 + Math.random() * 35,
+    phase: Math.random() * Math.PI * 2
+  }));
+}
+
+function background(theme, t) {
+  const palettes = {
+    sunset:["#170f3d","#e86b69","#ffbd76"],
+    space:["#030414","#21145d","#7748b9"],
+    night:["#030817","#102a53","#436da8"],
+    forest:["#041d25","#12645b","#63a67b"],
+    ocean:["#04162c","#075c8b","#35c8cf"]
+  };
+  const c = palettes[theme] || palettes.sunset;
+  const g = ctx.createLinearGradient(0,0,0,720);
+  g.addColorStop(0,c[0]);
+  g.addColorStop(.65,c[1]);
+  g.addColorStop(1,c[2]);
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,1280,720);
+
+  if (theme === "sunset") {
+    const x = 960 + Math.sin(t*.18)*35;
+    const glow = ctx.createRadialGradient(x,365,10,x,365,210);
+    glow.addColorStop(0,"#fff2b0");
+    glow.addColorStop(.22,"#ffca8b");
+    glow.addColorStop(1,"#ffb66a00");
+    ctx.fillStyle = glow;
+    ctx.fillRect(x-220,145,440,440);
+    ctx.fillStyle="#ffe7b3";
+    ctx.beginPath();
+    ctx.arc(x,365,67,0,Math.PI*2);
+    ctx.fill();
+  }
+
+  if (theme === "ocean") {
+    ctx.fillStyle="#74e8ee55";
+    for(let i=0;i<5;i++){
+      ctx.beginPath();
+      ctx.ellipse(960,475+i*30,330+i*25,12,0,0,Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  if (theme === "forest") {
+    for(let i=0;i<15;i++){
+      const x=i*100-20;
+      const h=180+(i%4)*48;
+      ctx.fillStyle=i%2?"#062d2d99":"#071c2b";
+      ctx.beginPath();
+      ctx.moveTo(x,600);
+      ctx.lineTo(x+45,600-h);
+      ctx.lineTo(x+95,600);
+      ctx.fill();
+    }
+  }
+
+  if (theme === "space" || theme === "night") {
+    particles.forEach(p=>{
+      const alpha=.35+.65*(.5+.5*Math.sin(t*1.7+p.phase));
+      ctx.fillStyle=`rgba(255,255,255,${alpha})`;
+      ctx.beginPath();
+      ctx.arc(p.x,p.y,p.size,0,Math.PI*2);
+      ctx.fill();
+    });
+  }
+
+  // Layered hills / cinematic silhouettes.
+  for(let layer=0;layer<3;layer++){
+    ctx.beginPath();
+    ctx.moveTo(0,720);
+    const base=520+layer*55;
+    for(let x=0;x<=1280;x+=20){
+      const y=base+Math.sin(x*.008+layer*2+t*.08)*30
+        +Math.sin(x*.019+layer)*15;
+      ctx.lineTo(x,y);
+    }
+    ctx.lineTo(1280,720);
+    ctx.closePath();
+    ctx.fillStyle=[
+      "rgba(5,10,29,.45)",
+      "rgba(4,10,25,.65)",
+      "rgba(2,6,18,.86)"
+    ][layer];
+    ctx.fill();
+  }
+}
+
+function wrapText(text, maxWidth, font) {
+  ctx.font=font;
+  const words=text.split(/\s+/);
+  const lines=[];
+  let line="";
+  for(const word of words){
+    const test=line ? line+" "+word : word;
+    if(ctx.measureText(test).width>maxWidth && line){
+      lines.push(line);
+      line=word;
+    } else line=test;
+  }
+  if(line)lines.push(line);
+  return lines.slice(0,3);
+}
+
+function draw(time) {
+  const t=time/1000;
+  const theme=chooseTheme();
+  background(theme,t);
+
+  const title=$("title").value.trim() || "NOVA AI";
+  const caption=$("caption").value.trim();
+  const fade=Math.min(1,t/.8);
+  const float=Math.sin(t*1.2)*12;
+
+  ctx.save();
+  ctx.globalAlpha=fade;
+  ctx.textAlign="center";
+  ctx.textBaseline="middle";
+
+  ctx.fillStyle="#ffffff";
+  ctx.shadowColor="#a4b5ff";
+  ctx.shadowBlur=24;
+
+  const titleFont="900 64px system-ui, sans-serif";
+  const lines=wrapText(title.toUpperCase(),1040,titleFont);
+  ctx.font=titleFont;
+
+  const lineHeight=78;
+  const totalHeight=lines.length*lineHeight;
+  const top=300-totalHeight/2+float;
+
+  lines.forEach((line,i)=>{
+    ctx.fillText(line,640,top+i*lineHeight,1040);
+  });
+
+  ctx.shadowBlur=0;
+  ctx.font="28px system-ui, sans-serif";
+  ctx.fillStyle="#e1e8ff";
+  if(caption)ctx.fillText(caption,640,top+totalHeight+36,1050);
+
+  ctx.font="600 17px system-ui, sans-serif";
+  ctx.fillStyle="#ffffffbb";
+  ctx.fillText("N O V A   A I   S T U D I O",640,650);
+
+  // Moving decorative light particles.
+  for(let i=0;i<16;i++){
+    const x=(i*97+t*28)%1280;
+    const y=100+((i*53)%490)+Math.sin(t+i)*12;
+    ctx.fillStyle="#ffffff66";
+    ctx.beginPath();
+    ctx.arc(x,y,1.5+(i%3),0,Math.PI*2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function renderLoop(now) {
+  if(!playing)return;
+  draw(now-startTime);
+  raf=requestAnimationFrame(renderLoop);
+}
+
+function startPreview() {
+  if(playing)return;
+  playing=true;
+  startTime=performance.now();
+  raf=requestAnimationFrame(renderLoop);
+  setStatus("Preview playing. Use Stop to pause the animation.");
+}
+
+function stopPreview() {
+  playing=false;
+  cancelAnimationFrame(raf);
+  draw(0);
+}
+
+function generateScenes() {
+  stopPreview();
+  makeParticles();
+
+  const prompt=$("prompt").value.trim();
+  if(!prompt){
+    setStatus("Enter a prompt to create a video.");
+    return;
+  }
+
+  // Use the prompt to choose a theme and make an editable title.
+  const cleaned=prompt
+    .replace(/^(make|create|generate|show me)\s+(a\s+)?(video|film|scene)\s+(about|of|with)\s+/i,"")
+    .replace(/[.!?]+$/,"")
+    .trim();
+
+  if(cleaned){
+    $("title").value=cleaned.slice(0,90).toUpperCase();
+    $("caption").value="A story created with NOVA AI";
+  }
+
+  draw(0);
+  setStatus("Scene created! Edit the title, caption, theme or duration, then preview or export.");
+}
+
+async function prepareAudio() {
+  const file=$("music").files[0];
+  if(!file)return null;
+
+  if(!window.AudioContext && !window.webkitAudioContext){
+    throw new Error("This browser does not support audio mixing for export.");
+  }
+
+  audioContext=new (window.AudioContext || window.webkitAudioContext)();
+  await audioContext.resume();
+
+  audioElement=new Audio();
+  audioElement.loop=true;
+  audioElement.preload="auto";
+
+  if(musicUrl)URL.revokeObjectURL(musicUrl);
+  musicUrl=URL.createObjectURL(file);
+  audioElement.src=musicUrl;
+
+  audioSource=audioContext.createMediaElementSource(audioElement);
+  audioDestination=audioContext.createMediaStreamDestination();
+
+  audioSource.connect(audioDestination);
+  audioSource.connect(audioContext.destination);
+
+  await new Promise((resolve,reject)=>{
+    audioElement.oncanplaythrough=resolve;
+    audioElement.onerror=()=>reject(new Error("Could not load the music file."));
+    audioElement.load();
+  });
+
+  return audioDestination.stream;
+}
+
+async function exportVideo() {
+  if(exporting)return;
+
+  const streamCanvas=canvas.captureStream(30);
+  let combinedStream=streamCanvas;
+  let audioStream=null;
+
+  try{
+    if(!window.MediaRecorder){
+      throw new Error("MediaRecorder is not supported in this browser. Try a recent version of Chrome.");
+    }
+    if(!canvas.captureStream){
+      throw new Error("Canvas recording is not supported by this browser.");
+    }
+
+    const mimeTypes=[
+      "video/webm;codecs=vp9,opus",
+      "video/webm;codecs=vp8,opus",
+      "video/webm"
+    ];
+    const mimeType=mimeTypes.find(type=>MediaRecorder.isTypeSupported(type));
+    if(!mimeType)throw new Error("WebM export is not supported by this browser.");
+
+    stopPreview();
+    draw(0);
+
+    audioStream=await prepareAudio();
+    if(audioStream){
+      combinedStream=new MediaStream([
+        ...streamCanvas.getVideoTracks(),
+        ...audioStream.getAudioTracks()
+      ]);
+      await audioElement.play();
+    }
+
+    const chunks=[];
+    recorder=new MediaRecorder(combinedStream,{mimeType});
+    recorder.ondataavailable=e=>{
+      if(e.data && e.data.size)chunks.push(e.data);
+    };
+
+    recorder.onerror=()=>{
+      setStatus("Recording error. Try a shorter video.");
+    };
+
+    recorder.onstop=()=>{
+      const blob=new Blob(chunks,{type:recorder.mimeType||"video/webm"});
+      if(lastBlobUrl)URL.revokeObjectURL(lastBlobUrl);
+      lastBlobUrl=URL.createObjectURL(blob);
+
+      const link=$("download");
+      link.hidden=false;
+      link.onclick=()=>{
+        const a=document.createElement("a");
+        a.href=lastBlobUrl;
+        a.download="nova-ai-video.webm";
+        a.click();
+      };
+
+      setStatus("Video ready! Tap Download video to save the WebM file.");
+      combinedStream.getTracks().forEach(track=>track.stop());
+      if(audioElement)audioElement.pause();
+      if(audioContext)audioContext.close().catch(()=>{});
+      audioContext=null;
+      audioElement=null;
+      audioSource=null;
+      audioDestination=null;
+      exporting=false;
+      $("export").disabled=false;
+    };
+
+    exporting=true;
+    $("export").disabled=true;
+    recorder.start(250);
+    setStatus("Recording video... Keep this page open.");
+
+    const seconds=Number($("duration").value);
+    const exportStart=performance.now();
+
+    function exportFrame(now){
+      if(!exporting)return;
+      draw(now-exportStart);
+      if(now-exportStart < seconds*1000){
+        requestAnimationFrame(exportFrame);
+      }else if(recorder && recorder.state!=="inactive"){
+        recorder.stop();
+      }
+    }
+    requestAnimationFrame(exportFrame);
+
+  }catch(error){
+    streamCanvas.getTracks().forEach(track=>track.stop());
+    if(audioStream)audioStream.getTracks().forEach(track=>track.stop());
+    if(audioElement)audioElement.pause();
+    if(audioContext)await audioContext.close().catch(()=>{});
+    audioContext=null;
+    audioElement=null;
+    audioSource=null;
+    audioDestination=null;
+    exporting=false;
+    $("export").disabled=false;
+    setStatus("Could not export: "+error.message);
+  }
+}
+
+$("generate").addEventListener("click",generateScenes);
+$("play").addEventListener("click",startPreview);
+$("stop").addEventListener("click",()=>{
+  stopPreview();
+  setStatus("Preview stopped.");
+});
+$("export").addEventListener("click",exportVideo);
+
+$("title").addEventListener("input",()=>{if(!playing)draw(0)});
+$("caption").addEventListener("input",()=>{if(!playing)draw(0)});
+$("theme").addEventListener("change",()=>{if(!playing)draw(0)});
+
+makeParticles();
+draw(0);
+</script>
+</body>
+  </html>
+  
